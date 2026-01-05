@@ -1,3 +1,5 @@
+flask
+requests
 aiohttp
 httpx
 httpx[http2]
