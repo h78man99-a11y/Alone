@@ -1,5 +1,2 @@
-flask
 requests
-aiohttp
-httpx
-httpx[http2]
+aiohttps
